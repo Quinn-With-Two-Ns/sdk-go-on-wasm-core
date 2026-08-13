@@ -312,6 +312,7 @@ type operationKind int
 const (
 	operationTimer operationKind = iota
 	operationActivity
+	operationLocalActivity
 	operationChild
 )
 
@@ -479,8 +480,12 @@ func (e *workflowExecution) tryApply(job *workflowactivation.WorkflowActivationJ
 		if operation == nil {
 			return false, nil
 		}
-		if operation.kind != operationActivity {
-			return false, fmt.Errorf("ResolveActivity sequence %d targets a non-activity operation", resolved.Seq)
+		wantKind := operationActivity
+		if resolved.IsLocal {
+			wantKind = operationLocalActivity
+		}
+		if operation.kind != wantKind {
+			return false, fmt.Errorf("ResolveActivity sequence %d has unexpected local status", resolved.Seq)
 		}
 		value, err := activityResolution(resolved.Result)
 		operation.result.set(value, err)

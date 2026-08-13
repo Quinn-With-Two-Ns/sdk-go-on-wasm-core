@@ -22,6 +22,16 @@ type ActivityOptions struct {
 	DisableEagerExecution bool
 }
 
+// LocalActivityOptions contains the timeouts supported for a local activity.
+type LocalActivityOptions struct {
+	ActivityID             string
+	ActivityType           string
+	ScheduleToCloseTimeout time.Duration
+	ScheduleToStartTimeout time.Duration
+	StartToCloseTimeout    time.Duration
+	LocalRetryThreshold    time.Duration
+}
+
 // ChildWorkflowOptions contains the child-workflow options supported by this worker.
 type ChildWorkflowOptions struct {
 	Namespace                string
@@ -98,6 +108,11 @@ func ExecuteActivity(ctx *Context, options ActivityOptions, arguments ...any) Fu
 	return ctx.executeActivity(options, arguments...)
 }
 
+// ExecuteLocalActivity schedules an activity on the workflow worker without a server activity task.
+func ExecuteLocalActivity(ctx *Context, options LocalActivityOptions, arguments ...any) Future {
+	return ctx.executeLocalActivity(options, arguments...)
+}
+
 // ExecuteChildWorkflow starts a child workflow and returns immediately.
 func ExecuteChildWorkflow(ctx *Context, options ChildWorkflowOptions, arguments ...any) ChildWorkflowFuture {
 	return ctx.executeChildWorkflow(options, arguments...)
@@ -168,6 +183,50 @@ func (c *Context) executeActivity(options ActivityOptions, arguments ...any) Fut
 			},
 		},
 	})
+	return future
+}
+
+func (c *Context) executeLocalActivity(options LocalActivityOptions, arguments ...any) Future {
+	c.requireRunning("ExecuteLocalActivity")
+	if options.ActivityType == "" {
+		return c.readyFuture(nil, errors.New("local activity type is required"))
+	}
+	if options.ScheduleToCloseTimeout <= 0 && options.StartToCloseTimeout <= 0 {
+		return c.readyFuture(nil, errors.New("local activity schedule-to-close or start-to-close timeout must be positive"))
+	}
+	if options.ScheduleToCloseTimeout < 0 || options.ScheduleToStartTimeout < 0 ||
+		options.StartToCloseTimeout < 0 || options.LocalRetryThreshold < 0 {
+		return c.readyFuture(nil, errors.New("local activity timeouts cannot be negative"))
+	}
+	payloads, err := c.execution.payloadConverter.ToPayloads(arguments...)
+	if err != nil {
+		return c.readyFuture(nil, fmt.Errorf("encode local activity input: %w", err))
+	}
+	seq := c.execution.nextSeq()
+	activityID := options.ActivityID
+	if activityID == "" {
+		activityID = fmt.Sprintf("local-activity-%d", seq)
+	}
+	future := newFuture(c.execution)
+	c.execution.operations[seq] = &workflowOperation{kind: operationLocalActivity, result: future}
+	command := &workflowcommands.ScheduleLocalActivity{
+		Seq: seq, ActivityId: activityID, ActivityType: options.ActivityType,
+		Arguments: payloads.GetPayloads(), Attempt: 1,
+		CancellationType: workflowcommands.ActivityCancellationType_WAIT_CANCELLATION_COMPLETED,
+	}
+	if options.ScheduleToCloseTimeout > 0 {
+		command.ScheduleToCloseTimeout = durationpb.New(options.ScheduleToCloseTimeout)
+	}
+	if options.ScheduleToStartTimeout > 0 {
+		command.ScheduleToStartTimeout = durationpb.New(options.ScheduleToStartTimeout)
+	}
+	if options.StartToCloseTimeout > 0 {
+		command.StartToCloseTimeout = durationpb.New(options.StartToCloseTimeout)
+	}
+	if options.LocalRetryThreshold > 0 {
+		command.LocalRetryThreshold = durationpb.New(options.LocalRetryThreshold)
+	}
+	c.execution.emit(&workflowcommands.WorkflowCommand{Variant: &workflowcommands.WorkflowCommand_ScheduleLocalActivity{ScheduleLocalActivity: command}})
 	return future
 }
 

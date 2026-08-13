@@ -33,7 +33,9 @@ func main() {
 		log.Fatal(err)
 	}
 	w.RegisterActivity(greet)
+	w.RegisterActivity(localGreet)
 	w.RegisterWorkflowUntyped("timer-greeting", timerGreeting)
+	w.RegisterWorkflowUntyped("local-activity-greeting", localActivityGreeting)
 	w.RegisterWorkflowUntyped("child-workflow-greeting", childWorkflowGreeting)
 	w.RegisterWorkflow(childGreeting)
 	w.RegisterWorkflowUntyped("parallel-greeting", parallelGreeting)
@@ -60,6 +62,12 @@ func timerGreeting(ctx *workflow.Context, name string) (string, error) {
 		StartToCloseTimeout: 10 * time.Second,
 	}, name).Get(ctx)
 	return greeting, err
+}
+
+func localActivityGreeting(ctx *workflow.Context, name string) (string, error) {
+	return workflow.ExecuteLocalActivity[string](ctx, localGreet, workflow.LocalActivityOptions{
+		StartToCloseTimeout: 10 * time.Second,
+	}, name).Get(ctx)
 }
 
 func childWorkflowGreeting(ctx *workflow.Context, name string) (string, error) {
@@ -117,4 +125,8 @@ func greet(ctx context.Context, name string) (string, error) {
 		return "", fmt.Errorf("record heartbeat: %w", err)
 	}
 	return "Hello, " + name + " from Temporal Core compiled through WASM into Go!", nil
+}
+
+func localGreet(name string) (string, error) {
+	return "Hello, " + name + " from a local activity through Temporal Core!", nil
 }

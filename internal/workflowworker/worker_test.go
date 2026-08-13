@@ -133,6 +133,41 @@ func TestTimerAndActivityCanBeStartedTogether(t *testing.T) {
 	}
 }
 
+func TestLocalActivityCommandAndResolution(t *testing.T) {
+	worker := newTestWorker()
+	worker.Register("local", func(ctx *Context, name string) (string, error) {
+		returnValue := ctx.executeLocalActivity(LocalActivityOptions{
+			ActivityType: "greet", ScheduleToCloseTimeout: time.Minute,
+			ScheduleToStartTimeout: time.Second, StartToCloseTimeout: 30 * time.Second,
+			LocalRetryThreshold: 10 * time.Second,
+		}, name)
+		var result string
+		return result, returnValue.Get(ctx, &result)
+	})
+	input, _ := worker.payloadConverter.ToPayloads("Temporal")
+	commands := successfulCommands(t, worker.handleActivation(initializeActivation("run-1", "local", input.Payloads)))
+	if len(commands) != 1 {
+		t.Fatalf("local activity commands = %d, want 1", len(commands))
+	}
+	schedule := commands[0].GetScheduleLocalActivity()
+	if schedule == nil || schedule.ActivityType != "greet" || schedule.ActivityId != "local-activity-1" || schedule.Attempt != 1 {
+		t.Fatalf("unexpected local activity command: %v", schedule)
+	}
+	if schedule.ScheduleToCloseTimeout.AsDuration() != time.Minute ||
+		schedule.ScheduleToStartTimeout.AsDuration() != time.Second ||
+		schedule.StartToCloseTimeout.AsDuration() != 30*time.Second ||
+		schedule.LocalRetryThreshold.AsDuration() != 10*time.Second {
+		t.Fatalf("local activity timeouts were not preserved: %v", schedule)
+	}
+	result, _ := worker.payloadConverter.ToPayload("Hello")
+	job := resolveActivityJob(1, result)
+	job.GetResolveActivity().IsLocal = true
+	completion := worker.handleActivation(activation("run-1", job))
+	if onlyCommand(t, completion).GetCompleteWorkflowExecution() == nil {
+		t.Fatal("local activity workflow did not complete")
+	}
+}
+
 func TestRestartReplayRegeneratesTheSameCommands(t *testing.T) {
 	register := func(worker *Worker) {
 		worker.Register("timer", func(ctx *Context) (int, error) {

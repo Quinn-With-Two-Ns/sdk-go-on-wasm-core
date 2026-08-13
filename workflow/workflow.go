@@ -39,6 +39,16 @@ type ActivityOptions struct {
 	DisableEagerExecution bool
 }
 
+// LocalActivityOptions contains options for an activity executed locally by the workflow worker.
+// At least one of ScheduleToCloseTimeout and StartToCloseTimeout must be positive.
+type LocalActivityOptions struct {
+	ActivityID             string
+	ScheduleToCloseTimeout time.Duration
+	ScheduleToStartTimeout time.Duration
+	StartToCloseTimeout    time.Duration
+	LocalRetryThreshold    time.Duration
+}
+
 // ChildWorkflowOptions contains the supported child-workflow options.
 // The workflow type comes from ExecuteChildWorkflow's function or ExecuteChildWorkflowUntyped's name.
 type ChildWorkflowOptions struct {
@@ -216,6 +226,28 @@ func ExecuteActivityUntyped(
 	return internalworkflow.ExecuteActivity(ctx, internalActivityOptions(activityName, options), arguments...)
 }
 
+// ExecuteLocalActivity schedules a registered activity locally and returns its typed result.
+func ExecuteLocalActivity[T any](
+	ctx *Context,
+	activity any,
+	options LocalActivityOptions,
+	arguments ...any,
+) Future[T] {
+	return Future[T]{future: internalworkflow.ExecuteLocalActivity(
+		ctx, internalLocalActivityOptions(operationName("activity", activity), options), arguments...,
+	)}
+}
+
+// ExecuteLocalActivityUntyped schedules a local activity identified by name.
+func ExecuteLocalActivityUntyped(
+	ctx *Context,
+	activityName string,
+	options LocalActivityOptions,
+	arguments ...any,
+) UntypedFuture {
+	return internalworkflow.ExecuteLocalActivity(ctx, internalLocalActivityOptions(activityName, options), arguments...)
+}
+
 // ExecuteChildWorkflow starts childWorkflow and returns a future for its result of type T.
 //
 // childWorkflow must be the registered workflow function. Its implementation is
@@ -258,6 +290,16 @@ func internalActivityOptions(name string, options ActivityOptions) internalworkf
 		TaskQueue:             options.TaskQueue,
 		StartToCloseTimeout:   options.StartToCloseTimeout,
 		DisableEagerExecution: options.DisableEagerExecution,
+	}
+}
+
+func internalLocalActivityOptions(name string, options LocalActivityOptions) internalworkflow.LocalActivityOptions {
+	return internalworkflow.LocalActivityOptions{
+		ActivityID: options.ActivityID, ActivityType: name,
+		ScheduleToCloseTimeout: options.ScheduleToCloseTimeout,
+		ScheduleToStartTimeout: options.ScheduleToStartTimeout,
+		StartToCloseTimeout:    options.StartToCloseTimeout,
+		LocalRetryThreshold:    options.LocalRetryThreshold,
 	}
 }
 
