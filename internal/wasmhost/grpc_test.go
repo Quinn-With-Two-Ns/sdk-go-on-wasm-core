@@ -116,6 +116,8 @@ func TestPrepareRequestMetadataExtractsGRPCTimeout(t *testing.T) {
 	prepared, timeout, err := prepareRequestMetadata(metadata.Pairs(
 		"grpc-timeout", "60000000u",
 		"temporal-namespace", "default",
+		"temporal-client-name", "embedded-core-default",
+		"temporal-client-version", "embedded-core-default",
 	))
 	if err != nil {
 		t.Fatal(err)
@@ -125,6 +127,12 @@ func TestPrepareRequestMetadataExtractsGRPCTimeout(t *testing.T) {
 	}
 	if got := prepared.Get("temporal-namespace"); len(got) != 1 || got[0] != "default" {
 		t.Fatalf("namespace metadata is %v", got)
+	}
+	if got := prepared.Get("temporal-client-name"); len(got) != 1 || got[0] != "go-sdk-core" {
+		t.Fatalf("client name metadata is %v", got)
+	}
+	if got := prepared.Get("temporal-client-version"); len(got) != 1 || got[0] != "v0.1.0" {
+		t.Fatalf("client version metadata is %v", got)
 	}
 }
 

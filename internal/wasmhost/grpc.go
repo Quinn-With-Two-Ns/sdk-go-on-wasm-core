@@ -22,6 +22,11 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+const (
+	sdkName    = "go-sdk-core"
+	sdkVersion = "v0.1.0"
+)
+
 type RawGRPCHost struct {
 	conn          *grpc.ClientConn
 	ctx           context.Context
@@ -282,6 +287,8 @@ func prepareRequestMetadata(input metadata.MD) (metadata.MD, time.Duration, erro
 			md.Append(name, value)
 		}
 	}
+	md.Set("temporal-client-name", sdkName)
+	md.Set("temporal-client-version", sdkVersion)
 	return md, timeout, nil
 }
 
