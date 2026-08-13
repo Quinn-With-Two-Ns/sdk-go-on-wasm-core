@@ -77,14 +77,20 @@ temporal workflow execute --address localhost:7233 --namespace default --workflo
 ## Build
 
 ```
+go test ./...
+```
+
+The generated Core module is committed, so a clean checkout builds without the Rust and WASM
+generation toolchains. To regenerate it after changing the Core bridge or its protobuf contracts:
+
+```
 git submodule update --init
 make generate
-go test ./...
 ```
 
 `make generate` builds the WASIp1 bridge, runs `wasm-opt`, translates it with `wasm2go`, and
 generates the Core protobuf bindings. The generated approximately 25 MB
-`internal/corewasm/generated.go` is ignored.
+`internal/corewasm/generated.go` is committed so downstream Go builds contain the Core module.
 
 The Go host and Rust WASM gRPC transport share
 `internal/sdk-core/crates/protos/protos/local/temporal/sdk/core/wasm_bridge/wasm_bridge.proto` as their wire

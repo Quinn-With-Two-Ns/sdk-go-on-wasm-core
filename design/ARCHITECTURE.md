@@ -58,7 +58,7 @@ There are three important boundaries:
 | [`internal/corebridge/`](../internal/corebridge) | Host-side driver for the generated Core module and callback gRPC event pump. |
 | [`internal/wasmhost/`](../internal/wasmhost) | Minimal WASI imports and the raw Go gRPC client used on Core's behalf. |
 | [`internal/corepb/`](../internal/corepb) | Generated Go bindings for the Core SDK and bridge protobuf contracts. |
-| [`internal/corewasm/`](../internal/corewasm) | Generated `wasm2go` module. `generated.go` is intentionally ignored by Git. |
+| [`internal/corewasm/`](../internal/corewasm) | Generated `wasm2go` module. `generated.go` is committed for reproducible downstream Go builds. |
 | [`internal/converter/`](../internal/converter) | Go value/payload conversion and recursive payload-codec application. |
 | [`internal/invoker/`](../internal/invoker) | Registration signature validation and reflective function invocation. |
 | [`internal/completionpipe/`](../internal/completionpipe) | Bounded concurrent submission of workflow and activity completions. |
@@ -257,10 +257,10 @@ and broader production transport hardening are outside the prototype's present s
 4. `protoc` generates Go bindings in `internal/corepb` from the same Core SDK protobufs used by
    Rust.
 
-The generated module is roughly 25 MiB and is ignored, so a fresh clone must initialize the
-submodule and run generation before the full Go build. `make test` regenerates artifacts, runs the
-Rust WASM bridge tests, verifies that no unintended public Go packages escaped, and runs all Go
-tests.
+The generated module is roughly 25 MiB and is committed, so a fresh clone can build and test the Go
+module without the Rust and WASM generation toolchains. Regeneration requires initializing the
+submodule and running `make generate`. `make test` regenerates artifacts, runs the Rust WASM bridge
+tests, verifies that no unintended public Go packages escaped, and runs all Go tests.
 
 ## Supported behavior and current limits
 
