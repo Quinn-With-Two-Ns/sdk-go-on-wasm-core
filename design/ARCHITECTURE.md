@@ -80,6 +80,11 @@ The public `Worker` wraps those views in a Go workflow worker and a Go activity 
 share the same Core worker and task queue, which lets Core return eager activity tasks in response
 to a workflow-task completion.
 
+Constructing the Core worker also starts Core's shared per-namespace worker, which reports worker
+status to the server on the configured interval. It reads Core's slot and poller state directly;
+the Go layer only supplies the interval. Its status reports travel through the same host gRPC
+transport as task polls and advance whenever the host drives the bridge.
+
 Registration happens before `Run`:
 
 - `RegisterWorkflow` and `RegisterActivity` derive the Temporal type from the Go function name;

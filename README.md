@@ -159,6 +159,13 @@ Queries, outbound workflow signals, cancellation, workflow API sandboxing, and p
 deadlock/determinism checks are not implemented. Local activities execute through the activity
 registrations on the same combined worker and are tracked by Core.
 
+Core reports worker status to the server once a minute by default, making the worker visible to
+`temporal worker list` and `temporal worker describe`. Reports include identity, task queue, run
+state, start time, and live slot and poller counts. `WorkerHeartbeatInterval` changes the cadence
+within Core's supported one-second to one-minute range; `DisableWorkerHeartbeat` turns reporting
+off. Servers that do not advertise worker heartbeats ignore the reports. Host name, process ID,
+CPU usage, and memory usage are empty because embedded Core cannot observe its host process.
+
 `worker.Options` accepts `TLS` for an explicit `tls.Config` and `APIKey` for static bearer
 authentication. Supplying an API key without an explicit TLS configuration enables TLS with the
 system certificate pool, which is sufficient for Temporal Cloud. Dynamic API-key rotation, mTLS

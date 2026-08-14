@@ -107,7 +107,11 @@ type WorkflowOptions struct {
 	MaxConcurrentWorkflowTaskPollers            int32
 	MaxCachedWorkflows                          int32
 	MaxEagerActivityReservationsPerWorkflowTask int32
-	Connection                                  ConnectionOptions
+	// WorkerHeartbeatIntervalMillis sets how often Core reports worker status to the
+	// server. Zero disables worker heartbeating. Core rejects any other value outside
+	// its supported 1s-60s range.
+	WorkerHeartbeatIntervalMillis int32
+	Connection                    ConnectionOptions
 }
 
 type ConnectionOptions struct {
@@ -901,6 +905,10 @@ func (o *bridgeOwner) startInit(
 	if err != nil {
 		return err
 	}
+	heartbeatIntervalMillis, err := workerHeartbeatIntervalMillis(workflowOptions)
+	if err != nil {
+		return err
+	}
 	_, err = o.requireSuccess(
 		o.bridge.module.Xtemporal_core_init_with_worker_options(
 			namespacePtr, namespaceLen,
@@ -912,6 +920,7 @@ func (o *bridgeOwner) startInit(
 			workflowOptions.MaxConcurrentWorkflowTaskPollers,
 			workflowOptions.MaxCachedWorkflows,
 			maxEagerActivityReservationsPerWorkflowTask,
+			heartbeatIntervalMillis,
 			workerMode,
 			errorOutput.ptr,
 			errorOutput.capacity,
@@ -919,6 +928,13 @@ func (o *bridgeOwner) startInit(
 		errorOutput,
 	)
 	return err
+}
+
+func workerHeartbeatIntervalMillis(workflowOptions WorkflowOptions) (int32, error) {
+	if workflowOptions.WorkerHeartbeatIntervalMillis < 0 {
+		return 0, errors.New("worker heartbeat interval must be non-negative")
+	}
+	return workflowOptions.WorkerHeartbeatIntervalMillis, nil
 }
 
 func eagerActivityReservationsForMode(workerMode int32, workflowOptions WorkflowOptions) (int32, error) {
