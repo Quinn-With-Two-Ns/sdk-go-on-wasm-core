@@ -330,6 +330,7 @@ type workflowExecution struct {
 	runID            string
 	nextSequence     uint32
 	operations       map[uint32]*workflowOperation
+	signalChannels   map[string]*signalChannel
 	dispatcher       workflowDispatcher
 	commands         []*workflowcommands.WorkflowCommand
 	terminal         bool
@@ -359,6 +360,7 @@ func newWorkflowExecution(payloadConverter converter.PayloadConverter, namespace
 		taskQueue:        taskQueue,
 		runID:            runID,
 		operations:       make(map[uint32]*workflowOperation),
+		signalChannels:   make(map[string]*signalChannel),
 	}
 	return execution
 }
@@ -416,11 +418,23 @@ func (e *workflowExecution) activate(jobs []*workflowactivation.WorkflowActivati
 	if !e.started {
 		return nil, errors.New("workflow execution was not initialized")
 	}
+
+	// Core orders signals before command resolutions because workflow code must observe all signals
+	// in an activation before any coroutine is allowed to run. Deliver them into their named
+	// channels first; unlike command resolutions, signal delivery does not depend on operations that
+	// the workflow creates while running.
+	pending := make([]*workflowactivation.WorkflowActivationJob, 0, len(jobs))
+	for _, job := range jobs {
+		if signal := job.GetSignalWorkflow(); signal != nil {
+			e.signalChannel(signal.SignalName).deliver(signal.Input)
+			continue
+		}
+		pending = append(pending, job)
+	}
 	if err := e.drive(); err != nil {
 		return nil, err
 	}
 
-	pending := append([]*workflowactivation.WorkflowActivationJob(nil), jobs...)
 	for len(pending) > 0 {
 		remaining := pending[:0]
 		applied := false

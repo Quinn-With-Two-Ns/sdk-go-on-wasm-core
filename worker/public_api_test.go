@@ -44,11 +44,14 @@ func TestPublicPackagesComposeWithoutImplementationImports(t *testing.T) {
 	var executeLocalActivityUntyped func(*workflow.Context, string, workflow.LocalActivityOptions, ...any) workflow.UntypedFuture = workflow.ExecuteLocalActivityUntyped
 	var executeChildWorkflow func(*workflow.Context, any, workflow.ChildWorkflowOptions, ...any) workflow.ChildWorkflowFuture[string] = workflow.ExecuteChildWorkflow[string]
 	var executeChildWorkflowUntyped func(*workflow.Context, string, workflow.ChildWorkflowOptions, ...any) workflow.UntypedChildWorkflowFuture = workflow.ExecuteChildWorkflowUntyped
+	var getSignalChannel func(*workflow.Context, string) workflow.ReceiveChannel[string] = workflow.GetSignalChannel[string]
+	var getSignalChannelUntyped func(*workflow.Context, string) workflow.UntypedReceiveChannel = workflow.GetSignalChannelUntyped
 	var registerWorkflow func(*worker.Worker, any) = (*worker.Worker).RegisterWorkflow
 	var registerWorkflowUntyped func(*worker.Worker, string, any) = (*worker.Worker).RegisterWorkflowUntyped
 	var registerActivity func(*worker.Worker, any) = (*worker.Worker).RegisterActivity
 	var registerActivityUntyped func(*worker.Worker, string, any) = (*worker.Worker).RegisterActivityUntyped
-	_, _, _, _, _, _, _, _, _, _, _, _, _, _ = heartbeat, newWorker, newFuture, newFutureUntyped,
+	_, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _ = heartbeat, newWorker, newFuture, newFutureUntyped,
 		executeActivity, executeActivityUntyped, executeLocalActivity, executeLocalActivityUntyped, executeChildWorkflow, executeChildWorkflowUntyped,
+		getSignalChannel, getSignalChannelUntyped,
 		registerWorkflow, registerWorkflowUntyped, registerActivity, registerActivityUntyped
 }

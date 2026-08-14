@@ -39,6 +39,7 @@ func main() {
 	w.RegisterWorkflowUntyped("child-workflow-greeting", childWorkflowGreeting)
 	w.RegisterWorkflow(childGreeting)
 	w.RegisterWorkflowUntyped("parallel-greeting", parallelGreeting)
+	w.RegisterWorkflowUntyped("signal-greeting", signalGreeting)
 
 	log.Printf("worker listening on %q", taskQueue)
 	if err := w.Run(ctx); err != nil {
@@ -118,6 +119,14 @@ func parallelGreeting(ctx *workflow.Context, name string) (string, error) {
 		return "", err
 	}
 	return first + " | " + second, nil
+}
+
+func signalGreeting(ctx *workflow.Context) (string, error) {
+	name, err := workflow.GetSignalChannel[string](ctx, "greet").Receive(ctx)
+	if err != nil {
+		return "", err
+	}
+	return "Hello, " + name + " from a workflow signal!", nil
 }
 
 func greet(ctx context.Context, name string) (string, error) {

@@ -82,6 +82,34 @@ func TestDecodePayloadsTransformsPayloadFieldsButNotSearchAttributes(t *testing.
 	}
 }
 
+func TestDecodePayloadsTransformsSignalInputAndHeaders(t *testing.T) {
+	codec := &markingPayloadCodec{}
+	activation := &workflowactivation.WorkflowActivation{
+		Jobs: []*workflowactivation.WorkflowActivationJob{{
+			Variant: &workflowactivation.WorkflowActivationJob_SignalWorkflow{
+				SignalWorkflow: &workflowactivation.SignalWorkflow{
+					SignalName: "greet",
+					Input:      []*commonpb.Payload{payload("one"), payload("two")},
+					Headers:    map[string]*commonpb.Payload{"trace": payload("header")},
+				},
+			},
+		}},
+	}
+
+	if err := DecodePayloads(activation, codec); err != nil {
+		t.Fatalf("DecodePayloads failed: %v", err)
+	}
+	signal := activation.Jobs[0].GetSignalWorkflow()
+	for _, converted := range append(signal.Input, signal.Headers["trace"]) {
+		if got := string(converted.Metadata["codec"]); got != "decoded" {
+			t.Fatalf("decoded marker = %q, want decoded", got)
+		}
+	}
+	if len(codec.decodeBatchSizes) != 2 || !containsBatch(codec.decodeBatchSizes, 2) {
+		t.Fatalf("decode batch sizes = %v, want signal inputs together and header separately", codec.decodeBatchSizes)
+	}
+}
+
 func TestEncodePayloadsTransformsCompletionPayloadFieldsButNotSearchAttributes(t *testing.T) {
 	codec := &markingPayloadCodec{}
 	schedule := &workflowcommands.ScheduleActivity{

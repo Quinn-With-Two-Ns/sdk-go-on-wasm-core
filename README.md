@@ -83,6 +83,25 @@ workflow task:
 temporal workflow execute --address localhost:7233 --namespace default --workflow-id go-wasm-parallel-demo --type parallel-greeting --task-queue go-wasm-demo --input '"Temporal"' --tls=false
 ```
 
+Workflows receive signals through typed, per-name channels. `Receive` blocks only the calling
+workflow coroutine, while signals that arrive before the channel is read remain buffered:
+
+```go
+name, err := workflow.GetSignalChannel[string](ctx, "greet").Receive(ctx)
+```
+
+`ReceiveAsync` consumes a buffered signal without blocking, and `Len` reports the current buffer
+size. Each signal is delivered to exactly one receiver in delivery order. Dynamic workflows can use
+`GetSignalChannelUntyped` and decode through a caller-provided pointer.
+
+Start the signal example, send its typed `greet` value, and read the result:
+
+```
+temporal workflow start --address localhost:7233 --namespace default --workflow-id go-wasm-signal-demo --type signal-greeting --task-queue go-wasm-demo --tls=false
+temporal workflow signal --address localhost:7233 --namespace default --workflow-id go-wasm-signal-demo --name greet --input '"Temporal"' --tls=false
+temporal workflow result --address localhost:7233 --namespace default --workflow-id go-wasm-signal-demo --tls=false
+```
+
 ## Build
 
 ```
@@ -133,12 +152,12 @@ pollers, and caches up to 32 workflow runs. These capacities are configurable th
 processing different runs and submitting their completions concurrently.
 
 The workflow interpreter supports typed workflow inputs/results, durable timers, asynchronous remote
-activities and child workflows, deterministic workflow goroutines, concurrent commands, replay after
-restart, and `RemoveFromCache`. Its dispatcher uses Go's `iter.Pull` coroutine primitive to run one
-workflow coroutine at a time in stable creation order. Signals, queries, cancellation, workflow API
-sandboxing, and production deadlock/determinism checks are not implemented. Local activities can be
-scheduled with `ExecuteLocalActivity`; they execute through the activity registrations on the same
-combined worker and are tracked by Core.
+and local activities, child workflows, inbound signal channels, deterministic workflow goroutines,
+concurrent commands, replay after restart, and `RemoveFromCache`. Its dispatcher uses Go's
+`iter.Pull` coroutine primitive to run one workflow coroutine at a time in stable creation order.
+Queries, outbound workflow signals, cancellation, workflow API sandboxing, and production
+deadlock/determinism checks are not implemented. Local activities execute through the activity
+registrations on the same combined worker and are tracked by Core.
 
 `worker.Options` accepts `TLS` for an explicit `tls.Config` and `APIKey` for static bearer
 authentication. Supplying an API key without an explicit TLS configuration enables TLS with the
