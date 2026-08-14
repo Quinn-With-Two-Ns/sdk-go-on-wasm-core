@@ -40,13 +40,15 @@ func TestPublicPackagesComposeWithoutImplementationImports(t *testing.T) {
 	var newFutureUntyped func(*workflow.Context) (workflow.UntypedFuture, workflow.UntypedSettable) = workflow.NewFutureUntyped
 	var executeActivity func(*workflow.Context, any, workflow.ActivityOptions, ...any) workflow.Future[string] = workflow.ExecuteActivity[string]
 	var executeActivityUntyped func(*workflow.Context, string, workflow.ActivityOptions, ...any) workflow.UntypedFuture = workflow.ExecuteActivityUntyped
+	var executeLocalActivity func(*workflow.Context, any, workflow.LocalActivityOptions, ...any) workflow.Future[string] = workflow.ExecuteLocalActivity[string]
+	var executeLocalActivityUntyped func(*workflow.Context, string, workflow.LocalActivityOptions, ...any) workflow.UntypedFuture = workflow.ExecuteLocalActivityUntyped
 	var executeChildWorkflow func(*workflow.Context, any, workflow.ChildWorkflowOptions, ...any) workflow.ChildWorkflowFuture[string] = workflow.ExecuteChildWorkflow[string]
 	var executeChildWorkflowUntyped func(*workflow.Context, string, workflow.ChildWorkflowOptions, ...any) workflow.UntypedChildWorkflowFuture = workflow.ExecuteChildWorkflowUntyped
 	var registerWorkflow func(*worker.Worker, any) = (*worker.Worker).RegisterWorkflow
 	var registerWorkflowUntyped func(*worker.Worker, string, any) = (*worker.Worker).RegisterWorkflowUntyped
 	var registerActivity func(*worker.Worker, any) = (*worker.Worker).RegisterActivity
 	var registerActivityUntyped func(*worker.Worker, string, any) = (*worker.Worker).RegisterActivityUntyped
-	_, _, _, _, _, _, _, _, _, _, _, _ = heartbeat, newWorker, newFuture, newFutureUntyped,
-		executeActivity, executeActivityUntyped, executeChildWorkflow, executeChildWorkflowUntyped,
+	_, _, _, _, _, _, _, _, _, _, _, _, _, _ = heartbeat, newWorker, newFuture, newFutureUntyped,
+		executeActivity, executeActivityUntyped, executeLocalActivity, executeLocalActivityUntyped, executeChildWorkflow, executeChildWorkflowUntyped,
 		registerWorkflow, registerWorkflowUntyped, registerActivity, registerActivityUntyped
 }

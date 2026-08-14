@@ -180,6 +180,17 @@ func TestUntypedNamesAndOptionsMapToInternalCommands(t *testing.T) {
 		t.Fatalf("activity options were not preserved: %+v", activity)
 	}
 
+	local := internalLocalActivityOptions("dynamic-local", LocalActivityOptions{
+		ActivityID: "local-id", ScheduleToCloseTimeout: time.Minute,
+		ScheduleToStartTimeout: time.Second, StartToCloseTimeout: 30 * time.Second,
+		LocalRetryThreshold: 10 * time.Second,
+	})
+	if local.ActivityType != "dynamic-local" || local.ActivityID != "local-id" ||
+		local.ScheduleToCloseTimeout != time.Minute || local.ScheduleToStartTimeout != time.Second ||
+		local.StartToCloseTimeout != 30*time.Second || local.LocalRetryThreshold != 10*time.Second {
+		t.Fatalf("local activity options were not preserved: %+v", local)
+	}
+
 	child := internalChildWorkflowOptions("dynamic-workflow", ChildWorkflowOptions{
 		Namespace:                "namespace",
 		WorkflowID:               "workflow-id",

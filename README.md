@@ -41,6 +41,15 @@ The result is:
 "Hello, Temporal from Temporal Core compiled through WASM into Go!"
 ```
 
+To run the local-activity example, which executes `localGreet` on the same worker without scheduling
+a server activity task:
+
+```
+temporal workflow execute --address localhost:7233 --namespace default --workflow-id go-wasm-local-activity-demo --type local-activity-greeting --task-queue go-wasm-demo --input '"Temporal"' --tls=false
+```
+
+The result is `"Hello, Temporal from a local activity through Temporal Core!"`.
+
 To run the child-workflow example on the same worker:
 
 ```
@@ -63,8 +72,8 @@ and execution derive the same Temporal type name from the Go function. Use the `
 variants when an explicit type name is required.
 
 Dynamic workflows can call cross-language or otherwise runtime-selected operation names through
-`ExecuteActivityUntyped` and `ExecuteChildWorkflowUntyped`; those futures retain pointer-based result
-decoding.
+`ExecuteActivityUntyped`, `ExecuteLocalActivityUntyped`, and `ExecuteChildWorkflowUntyped`; those
+futures retain pointer-based result decoding.
 
 The parallel example starts two deterministic workflow goroutines. Each schedules an activity and a
 child workflow before awaiting either future, so all four operations are issued from the same
@@ -126,8 +135,10 @@ processing different runs and submitting their completions concurrently.
 The workflow interpreter supports typed workflow inputs/results, durable timers, asynchronous remote
 activities and child workflows, deterministic workflow goroutines, concurrent commands, replay after
 restart, and `RemoveFromCache`. Its dispatcher uses Go's `iter.Pull` coroutine primitive to run one
-workflow coroutine at a time in stable creation order. Signals, queries, cancellation, local
-activities, workflow API sandboxing, and production deadlock/determinism checks are not implemented.
+workflow coroutine at a time in stable creation order. Signals, queries, cancellation, workflow API
+sandboxing, and production deadlock/determinism checks are not implemented. Local activities can be
+scheduled with `ExecuteLocalActivity`; they execute through the activity registrations on the same
+combined worker and are tracked by Core.
 
 `worker.Options` accepts `TLS` for an explicit `tls.Config` and `APIKey` for static bearer
 authentication. Supplying an API key without an explicit TLS configuration enables TLS with the
