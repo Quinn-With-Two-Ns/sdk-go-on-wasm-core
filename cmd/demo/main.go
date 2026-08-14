@@ -6,6 +6,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -37,6 +38,7 @@ func main() {
 	w.RegisterWorkflowUntyped("child-workflow-greeting", childWorkflowGreeting)
 	w.RegisterWorkflow(childGreeting)
 	w.RegisterWorkflowUntyped("parallel-greeting", parallelGreeting)
+	w.RegisterWorkflowUntyped("signal-greeting", signalGreeting)
 
 	log.Printf("worker listening on %q", taskQueue)
 	if err := w.Run(ctx); err != nil {
@@ -110,6 +112,53 @@ func parallelGreeting(ctx *workflow.Context, name string) (string, error) {
 		return "", err
 	}
 	return first + " | " + second, nil
+}
+
+// signalGreeting greets every name sent to the "greet" signal until an "exit" signal arrives.
+//
+// One coroutine blocks on each signal channel. Only one workflow coroutine runs at a time, so they
+// share the collected greetings without synchronization.
+func signalGreeting(ctx *workflow.Context) (string, error) {
+	done, settable := workflow.NewFuture[string](ctx)
+	var greetings []string
+
+	workflow.GoNamed(ctx, "greet-receiver", func(ctx *workflow.Context) {
+		names := workflow.GetSignalChannel[string](ctx, "greet")
+		for {
+			name, err := names.Receive(ctx)
+			if err != nil {
+				return
+			}
+			greeting, err := workflow.ExecuteActivity[string](ctx, greet, workflow.ActivityOptions{
+				TaskQueue:           taskQueue,
+				StartToCloseTimeout: 10 * time.Second,
+			}, name).Get(ctx)
+			if err != nil {
+				if !done.IsReady() {
+					settable.SetError(err)
+				}
+				return
+			}
+			greetings = append(greetings, greeting)
+		}
+	})
+
+	workflow.GoNamed(ctx, "exit-receiver", func(ctx *workflow.Context) {
+		// The exit signal only needs to arrive, so its input is discarded through the untyped form.
+		err := workflow.GetSignalChannelUntyped(ctx, "exit").Receive(ctx, nil)
+		// A signal and an activity failure can arrive in the same workflow task, so both
+		// coroutines can become runnable with the result already decided.
+		if done.IsReady() {
+			return
+		}
+		if err != nil {
+			settable.SetError(err)
+			return
+		}
+		settable.SetValue(strings.Join(greetings, " "))
+	})
+
+	return done.Get(ctx)
 }
 
 func greet(ctx context.Context, name string) (string, error) {

@@ -51,7 +51,7 @@ There are three important boundaries:
 | Path | Purpose |
 | --- | --- |
 | [`activity/`](../activity) | Public activity-side API. Currently exposes heartbeat recording. |
-| [`workflow/`](../workflow) | Public deterministic workflow API, typed futures, timers, activities, child workflows, and workflow goroutines. |
+| [`workflow/`](../workflow) | Public deterministic workflow API, typed futures, timers, activities, child workflows, signal channels, and workflow goroutines. |
 | [`worker/`](../worker) | Public combined-worker construction, registration, configuration, run, and shutdown. |
 | [`internal/workflowworker/`](../internal/workflowworker) | Go workflow interpreter, per-run cache, deterministic dispatcher, and workflow activation loop. |
 | [`internal/activityworker/`](../internal/activityworker) | Activity invocation, cancellation, heartbeat handling, and activity task loop. |
@@ -163,6 +163,7 @@ Each cached `workflowExecution` contains:
 
 - a deterministic sequence counter used to correlate commands with later activation jobs;
 - outstanding timer, activity, and child-workflow operations;
+- one signal channel per signal name, with its buffered signals and waiting receivers;
 - workflow coroutines and their blocked futures;
 - commands emitted during the current activation.
 
@@ -171,6 +172,15 @@ coroutines in stable creation order and runs only one at a time. A future `Get` 
 coroutine as waiting and yields; a later activation job resolves the matching future and makes that
 coroutine runnable again. This provides deterministic concurrency without letting workflow code
 race on ordinary Go goroutines.
+
+Signals are the one inbound job addressed by name rather than by command sequence, so a
+`SignalWorkflow` job always applies. It is appended to the channel for its signal name, which the
+execution creates on demand from either side, so a signal that arrives before the workflow asks for
+that name is buffered rather than lost. A blocked `Receive` registers a future on the channel;
+delivery hands each signal to the longest-waiting receiver, or buffers it when none is waiting.
+Each signal therefore reaches exactly one receiver, and coroutines requesting the same name share
+one buffer. Receiving emits no command and consumes no sequence number, so signal handling adds
+nothing to the replayed command stream.
 
 Core turns workflow history into activations. On replay or after a process restart, initialization
 and resolution jobs drive the Go workflow function through the same command sequence. Cached
@@ -265,11 +275,13 @@ tests, verifies that no unintended public Go packages escaped, and runs all Go t
 ## Supported behavior and current limits
 
 The implemented workflow surface includes typed inputs and results, durable timers, asynchronous
-remote activities, child workflows, deterministic workflow goroutines, concurrent commands,
-replay, and cache eviction. The combined worker supports eager activities on its shared task queue.
+remote activities, child workflows, inbound signals through per-name channels, deterministic
+workflow goroutines, concurrent commands, replay, and cache eviction. The combined worker supports
+eager activities on its shared task queue.
 
-This remains a deliberately limited prototype. Signals, queries, workflow cancellation, local
-activities, workflow API sandboxing, and production deadlock/determinism checks are not implemented.
+This remains a deliberately limited prototype. Queries, signalling other workflows, workflow
+cancellation, local activities, workflow API sandboxing, and production deadlock/determinism checks
+are not implemented.
 When adding one of these features, preserve the existing ownership rules:
 
 1. Temporal protocol and history state belong in Core whenever Core already models them.

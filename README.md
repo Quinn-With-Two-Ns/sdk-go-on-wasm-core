@@ -74,6 +74,30 @@ workflow task:
 temporal workflow execute --address localhost:7233 --namespace default --workflow-id go-wasm-parallel-demo --type parallel-greeting --task-queue go-wasm-demo --input '"Temporal"' --tls=false
 ```
 
+Signals are received through per-name channels. `GetSignalChannel` returns the channel carrying one
+signal name as values of type `T`; `Receive` blocks only the calling workflow coroutine:
+
+```go
+name, err := workflow.GetSignalChannel[string](ctx, "greet").Receive(ctx)
+```
+
+Signals are buffered per name from the moment the run is initialized, so a channel obtained after a
+signal arrived still observes it, and each signal reaches exactly one receiver in delivery order.
+`ReceiveAsync` takes a buffered signal without blocking and reports whether one was available, and
+`Len` reports how many remain. `GetSignalChannelUntyped` is the dynamic escape hatch for signal
+payload types that are only known at runtime; it decodes through a caller-provided pointer, and a
+`nil` pointer discards the input. Awaiting a signal alongside futures is expressed by receiving
+inside a coroutine started with `workflow.Go` and completing a `Settable` with the result.
+
+The signal example greets every name sent to `greet` and returns once `exit` arrives:
+
+```
+temporal workflow start --address localhost:7233 --namespace default --workflow-id go-wasm-signal-demo --type signal-greeting --task-queue go-wasm-demo --tls=false
+temporal workflow signal --address localhost:7233 --namespace default --workflow-id go-wasm-signal-demo --name greet --input '"Temporal"' --tls=false
+temporal workflow signal --address localhost:7233 --namespace default --workflow-id go-wasm-signal-demo --name exit --tls=false
+temporal workflow result --address localhost:7233 --namespace default --workflow-id go-wasm-signal-demo --tls=false
+```
+
 ## Build
 
 ```
@@ -124,10 +148,11 @@ pollers, and caches up to 32 workflow runs. These capacities are configurable th
 processing different runs and submitting their completions concurrently.
 
 The workflow interpreter supports typed workflow inputs/results, durable timers, asynchronous remote
-activities and child workflows, deterministic workflow goroutines, concurrent commands, replay after
-restart, and `RemoveFromCache`. Its dispatcher uses Go's `iter.Pull` coroutine primitive to run one
-workflow coroutine at a time in stable creation order. Signals, queries, cancellation, local
-activities, workflow API sandboxing, and production deadlock/determinism checks are not implemented.
+activities and child workflows, inbound signals, deterministic workflow goroutines, concurrent
+commands, replay after restart, and `RemoveFromCache`. Its dispatcher uses Go's `iter.Pull` coroutine
+primitive to run one workflow coroutine at a time in stable creation order. Queries, outbound
+signals, cancellation, local activities, workflow API sandboxing, and production deadlock/determinism
+checks are not implemented.
 
 `worker.Options` accepts `TLS` for an explicit `tls.Config` and `APIKey` for static bearer
 authentication. Supplying an API key without an explicit TLS configuration enables TLS with the

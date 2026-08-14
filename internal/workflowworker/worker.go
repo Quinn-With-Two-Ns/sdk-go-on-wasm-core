@@ -329,6 +329,7 @@ type workflowExecution struct {
 	runID            string
 	nextSequence     uint32
 	operations       map[uint32]*workflowOperation
+	signalChannels   map[string]*signalChannel
 	dispatcher       workflowDispatcher
 	commands         []*workflowcommands.WorkflowCommand
 	terminal         bool
@@ -358,6 +359,7 @@ func newWorkflowExecution(payloadConverter converter.PayloadConverter, namespace
 		taskQueue:        taskQueue,
 		runID:            runID,
 		operations:       make(map[uint32]*workflowOperation),
+		signalChannels:   make(map[string]*signalChannel),
 	}
 	return execution
 }
@@ -461,6 +463,12 @@ func (e *workflowExecution) tryApply(job *workflowactivation.WorkflowActivationJ
 	}
 	if job.GetRemoveFromCache() != nil {
 		return false, errors.New("RemoveFromCache must be the only job in an activation")
+	}
+	if signal := job.GetSignalWorkflow(); signal != nil {
+		// Signals are addressed by name rather than by command sequence, so they always apply and
+		// buffer even when no coroutine has asked for that name yet.
+		e.signalChannel(signal.SignalName).deliverSignal(signal.Input)
+		return true, nil
 	}
 	if fired := job.GetFireTimer(); fired != nil {
 		operation := e.operations[fired.Seq]
