@@ -62,6 +62,7 @@ func (c *signalChannel) Receive(ctx *Context, valuePtr any) error {
 	if ctx == nil || ctx.execution != c.execution {
 		return errors.New("signal Receive requires its workflow context")
 	}
+	c.requireRunning("Receive")
 	if err := validateSignalTarget(valuePtr); err != nil {
 		return err
 	}
@@ -82,6 +83,7 @@ func (c *signalChannel) Receive(ctx *Context, valuePtr any) error {
 }
 
 func (c *signalChannel) ReceiveAsync(valuePtr any) (bool, error) {
+	c.requireRunning("ReceiveAsync")
 	if err := validateSignalTarget(valuePtr); err != nil {
 		return false, err
 	}
@@ -93,6 +95,12 @@ func (c *signalChannel) ReceiveAsync(valuePtr any) (bool, error) {
 }
 
 func (c *signalChannel) Len() int { return len(c.buffer) }
+
+func (c *signalChannel) requireRunning(operation string) {
+	if c.execution == nil || c.execution.dispatcher.current == nil {
+		panic("workflow signal " + operation + " must run in a workflow coroutine")
+	}
+}
 
 func (c *signalChannel) take() ([]*commonpb.Payload, bool) {
 	if len(c.buffer) == 0 {

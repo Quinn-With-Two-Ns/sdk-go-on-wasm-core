@@ -102,6 +102,67 @@ temporal workflow signal --address localhost:7233 --namespace default --workflow
 temporal workflow result --address localhost:7233 --namespace default --workflow-id go-wasm-signal-demo --tls=false
 ```
 
+Workflows can expose typed query handlers that read their current in-memory state without changing
+workflow history:
+
+```go
+err := workflow.SetQueryHandler(ctx, "status", func() (Status, error) {
+	return currentStatus, nil
+})
+```
+
+The query example changes its visible state after a signal and waits for a second signal before
+completing, so both states can be inspected:
+
+```
+temporal workflow start --address localhost:7233 --namespace default --workflow-id go-wasm-query-demo --type query-greeting --task-queue go-wasm-demo --tls=false
+temporal workflow query --address localhost:7233 --namespace default --workflow-id go-wasm-query-demo --type status --tls=false
+temporal workflow signal --address localhost:7233 --namespace default --workflow-id go-wasm-query-demo --name greet --input '"Temporal"' --tls=false
+temporal workflow query --address localhost:7233 --namespace default --workflow-id go-wasm-query-demo --type status --tls=false
+temporal workflow signal --address localhost:7233 --namespace default --workflow-id go-wasm-query-demo --name finish --tls=false
+temporal workflow result --address localhost:7233 --namespace default --workflow-id go-wasm-query-demo --tls=false
+```
+
+Query handler arguments and results use the worker's payload converter. Handler errors, panics,
+unknown query types, and attempts to call command-producing or blocking workflow APIs fail only that
+query and leave the workflow running. Query handlers must not mutate workflow state.
+
+Workflow Updates can validate input, mutate workflow state, block on durable workflow operations,
+and return a typed result. The handler must accept `*workflow.Context` first; its optional validator
+accepts the same arguments, with or without the context, and returns only an error:
+
+```go
+err := workflow.SetUpdateHandlerWithOptions(ctx, "set-name",
+	func(ctx *workflow.Context, name string) (Status, error) {
+		currentStatus = Status{Name: name, State: "name updated"}
+		return currentStatus, nil
+	},
+	workflow.UpdateHandlerOptions{Validator: func(name string) error {
+		if name == "" {
+			return errors.New("name must not be empty")
+		}
+		return nil
+	}},
+)
+```
+
+The update example deliberately waits on a durable timer before returning, then exposes the changed
+state through its query handler:
+
+```
+temporal workflow start --address localhost:7233 --namespace default --workflow-id go-wasm-update-demo --type update-greeting --task-queue go-wasm-demo --tls=false
+temporal workflow query --address localhost:7233 --namespace default --workflow-id go-wasm-update-demo --type status --tls=false
+temporal workflow update execute --address localhost:7233 --namespace default --workflow-id go-wasm-update-demo --name set-name --input '"Temporal"' --tls=false
+temporal workflow query --address localhost:7233 --namespace default --workflow-id go-wasm-update-demo --type status --tls=false
+temporal workflow signal --address localhost:7233 --namespace default --workflow-id go-wasm-update-demo --name finish --tls=false
+temporal workflow result --address localhost:7233 --namespace default --workflow-id go-wasm-update-demo --tls=false
+```
+
+Validation rejection happens before acceptance and does not run the handler. During replay Core asks
+the worker to run the accepted handler again without re-running its validator. `GetCurrentUpdateInfo`
+returns the update ID and name inside validators, handlers, and deterministic workflow goroutines
+spawned by a handler.
+
 ## Build
 
 ```
@@ -152,10 +213,10 @@ pollers, and caches up to 32 workflow runs. These capacities are configurable th
 processing different runs and submitting their completions concurrently.
 
 The workflow interpreter supports typed workflow inputs/results, durable timers, asynchronous remote
-and local activities, child workflows, inbound signal channels, deterministic workflow goroutines,
-concurrent commands, replay after restart, and `RemoveFromCache`. Its dispatcher uses Go's
-`iter.Pull` coroutine primitive to run one workflow coroutine at a time in stable creation order.
-Queries, outbound workflow signals, cancellation, workflow API sandboxing, and production
+and local activities, child workflows, inbound signal channels, query and update handlers, deterministic
+workflow goroutines, concurrent commands, replay after restart, and `RemoveFromCache`. Its dispatcher
+uses Go's `iter.Pull` coroutine primitive to run one workflow coroutine at a time in stable creation
+order. Outbound workflow signals, cancellation, workflow API sandboxing, and production
 deadlock/determinism checks are not implemented. Local activities execute through the activity
 registrations on the same combined worker and are tracked by Core.
 

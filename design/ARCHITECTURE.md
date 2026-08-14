@@ -51,7 +51,7 @@ There are three important boundaries:
 | Path | Purpose |
 | --- | --- |
 | [`activity/`](../activity) | Public activity-side API. Currently exposes heartbeat recording. |
-| [`workflow/`](../workflow) | Public deterministic workflow API, typed futures, timers, activities, child workflows, signal channels, and workflow goroutines. |
+| [`workflow/`](../workflow) | Public deterministic workflow API, typed futures, timers, activities, child workflows, signal channels, query and update handlers, and workflow goroutines. |
 | [`worker/`](../worker) | Public combined-worker construction, registration, configuration, run, and shutdown. |
 | [`internal/workflowworker/`](../internal/workflowworker) | Go workflow interpreter, per-run cache, deterministic dispatcher, and workflow activation loop. |
 | [`internal/activityworker/`](../internal/activityworker) | Activity invocation, cancellation, heartbeat handling, and activity task loop. |
@@ -63,7 +63,7 @@ There are three important boundaries:
 | [`internal/invoker/`](../internal/invoker) | Registration signature validation and reflective function invocation. |
 | [`internal/completionpipe/`](../internal/completionpipe) | Bounded concurrent submission of workflow and activity completions. |
 | [`internal/sdk-core/`](../internal/sdk-core) | `sdk-rust` submodule plus this prototype's Rust WASM bridge crate and shared protobuf schema. |
-| [`cmd/demo/`](../cmd/demo) | Executable example covering timers, activities, child workflows, and deterministic concurrency. |
+| [`cmd/demo/`](../cmd/demo) | Executable examples covering timers, activities, child workflows, signals, queries, updates, and deterministic concurrency. |
 | [`benchmark/`](../benchmark) | Opt-in end-to-end comparison with the official Go SDK. |
 | [`scripts/generate.sh`](../scripts/generate.sh) | Rust-to-WASM build, optimization, `wasm2go` translation, and Go protobuf generation. |
 
@@ -169,6 +169,7 @@ Each cached `workflowExecution` contains:
 - a deterministic sequence counter used to correlate commands with later activation jobs;
 - outstanding timer, activity, and child-workflow operations;
 - one buffered receive channel per observed signal name;
+- registered query and update handlers;
 - workflow coroutines and their blocked futures;
 - commands emitted during the current activation.
 
@@ -185,6 +186,16 @@ same deterministic future mechanism used by other workflow operations. If no rec
 the signal remains buffered until `Receive` or `ReceiveAsync` consumes it. Channel lookup is lazy on
 both sides, so signals that arrive before workflow code asks for their name are not lost. Signal
 delivery emits no workflow command and consumes no sequence number.
+
+Inbound `DoUpdate` jobs use Core's update protocol rather than a command sequence. The interpreter
+runs the optional validator before acceptance when Core requests it; replayed updates skip validation.
+A validation error or panic emits a rejection. Once accepted, each handler runs in its own
+deterministic workflow coroutine, so it may mutate state and wait on timers, activities, child
+workflows, signals, or futures. The worker emits acceptance immediately and completion or handler
+failure when that coroutine finishes. Update metadata propagates to deterministic coroutines spawned
+by the handler. A handler panic fails the activation and evicts the cached execution so Core can retry
+from history. Queries run after other activation work and therefore observe state changed by an
+update that completed in the same activation.
 
 Core turns workflow history into activations. On replay or after a process restart, initialization
 and resolution jobs drive the Go workflow function through the same command sequence. Cached
@@ -280,12 +291,11 @@ tests, verifies that no unintended public Go packages escaped, and runs all Go t
 
 The implemented workflow surface includes typed inputs and results, durable timers, asynchronous
 remote and local activities, child workflows, inbound signals through typed receive channels,
-deterministic workflow goroutines, concurrent commands, replay, and cache eviction. The combined
-worker supports eager activities on its shared task queue.
+read-only query handlers, validated workflow update handlers, deterministic workflow goroutines, concurrent commands, replay, and cache
+eviction. The combined worker supports eager activities on its shared task queue.
 
-This remains a deliberately limited prototype. Queries, outbound workflow signals, workflow
-cancellation, workflow API sandboxing, and production deadlock/determinism checks are not
-implemented.
+This remains a deliberately limited prototype. Outbound workflow signals, workflow cancellation,
+workflow API sandboxing, and production deadlock/determinism checks are not implemented.
 When adding one of these features, preserve the existing ownership rules:
 
 1. Temporal protocol and history state belong in Core whenever Core already models them.

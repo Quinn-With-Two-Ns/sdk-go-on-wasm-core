@@ -73,8 +73,9 @@ type ChildWorkflowFuture interface {
 
 // Context is the deterministic execution context for one workflow coroutine.
 type Context struct {
-	execution *workflowExecution
-	coroutine *workflowCoroutine
+	execution  *workflowExecution
+	coroutine  *workflowCoroutine
+	updateInfo *UpdateInfo
 }
 
 // Go starts a deterministic workflow coroutine. Only one workflow coroutine executes at a time.
@@ -88,7 +89,7 @@ func GoNamed(ctx *Context, name string, function func(*Context)) {
 		panic("workflow Go requires a function")
 	}
 	ctx.requireRunning("Go")
-	ctx.execution.addCoroutine(name, function)
+	ctx.execution.addCoroutineWithUpdateInfo(name, ctx.updateInfo, function)
 }
 
 // NewFuture creates a manually completable workflow future.

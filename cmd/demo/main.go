@@ -2,10 +2,12 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -40,6 +42,8 @@ func main() {
 	w.RegisterWorkflow(childGreeting)
 	w.RegisterWorkflowUntyped("parallel-greeting", parallelGreeting)
 	w.RegisterWorkflowUntyped("signal-greeting", signalGreeting)
+	w.RegisterWorkflowUntyped("query-greeting", queryGreeting)
+	w.RegisterWorkflowUntyped("update-greeting", updateGreeting)
 
 	log.Printf("worker listening on %q", taskQueue)
 	if err := w.Run(ctx); err != nil {
@@ -127,6 +131,58 @@ func signalGreeting(ctx *workflow.Context) (string, error) {
 		return "", err
 	}
 	return "Hello, " + name + " from a workflow signal!", nil
+}
+
+type greetingStatus struct {
+	Name  string `json:"name"`
+	State string `json:"state"`
+}
+
+func queryGreeting(ctx *workflow.Context) (string, error) {
+	status := greetingStatus{State: "waiting for greet signal"}
+	if err := workflow.SetQueryHandler(ctx, "status", func() (greetingStatus, error) {
+		return status, nil
+	}); err != nil {
+		return "", err
+	}
+	name, err := workflow.GetSignalChannel[string](ctx, "greet").Receive(ctx)
+	if err != nil {
+		return "", err
+	}
+	status = greetingStatus{Name: name, State: "waiting for finish signal"}
+	if _, err := workflow.GetSignalChannel[struct{}](ctx, "finish").Receive(ctx); err != nil {
+		return "", err
+	}
+	return "Hello, " + name + " from a queried workflow!", nil
+}
+
+func updateGreeting(ctx *workflow.Context) (string, error) {
+	status := greetingStatus{State: "waiting for set-name update"}
+	if err := workflow.SetQueryHandler(ctx, "status", func() (greetingStatus, error) {
+		return status, nil
+	}); err != nil {
+		return "", err
+	}
+	if err := workflow.SetUpdateHandlerWithOptions(ctx, "set-name", func(ctx *workflow.Context, name string) (greetingStatus, error) {
+		if err := workflow.Sleep(ctx, time.Second); err != nil {
+			return greetingStatus{}, err
+		}
+		status = greetingStatus{Name: name, State: "name updated"}
+		return status, nil
+	}, workflow.UpdateHandlerOptions{
+		Validator: func(name string) error {
+			if strings.TrimSpace(name) == "" {
+				return errors.New("name must not be empty")
+			}
+			return nil
+		},
+	}); err != nil {
+		return "", err
+	}
+	if _, err := workflow.GetSignalChannel[struct{}](ctx, "finish").Receive(ctx); err != nil {
+		return "", err
+	}
+	return "Hello, " + status.Name + " from a workflow update!", nil
 }
 
 func greet(ctx context.Context, name string) (string, error) {

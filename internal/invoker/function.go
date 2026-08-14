@@ -20,6 +20,11 @@ type Function struct {
 	result     bool
 }
 
+// DecodedInput contains payload arguments decoded for a validated Function.
+type DecodedInput struct {
+	values []reflect.Value
+}
+
 // New validates a registered function. The context parameter may be required
 // for workflows or optional for activities.
 func New(
@@ -68,21 +73,43 @@ func (f *Function) Execute(
 	payloadConverter converter.PayloadConverter,
 	input []*commonpb.Payload,
 ) (*commonpb.Payload, error) {
-	functionType := f.function.Type()
-	arguments := make([]reflect.Value, 0, functionType.NumIn())
-	if f.inputStart == 1 {
-		arguments = append(arguments, reflect.ValueOf(contextArgument))
+	decoded, err := f.DecodeInput(payloadConverter, input)
+	if err != nil {
+		return nil, err
 	}
+	return f.ExecuteDecoded(contextArgument, payloadConverter, decoded)
+}
 
+// DecodeInput converts serialized arguments without invoking the function.
+func (f *Function) DecodeInput(
+	payloadConverter converter.PayloadConverter,
+	input []*commonpb.Payload,
+) (*DecodedInput, error) {
+	functionType := f.function.Type()
 	valuePointers := make([]any, 0, functionType.NumIn()-f.inputStart)
+	values := make([]reflect.Value, 0, functionType.NumIn()-f.inputStart)
 	for i := f.inputStart; i < functionType.NumIn(); i++ {
 		valuePointer := reflect.New(functionType.In(i))
 		valuePointers = append(valuePointers, valuePointer.Interface())
-		arguments = append(arguments, valuePointer.Elem())
+		values = append(values, valuePointer.Elem())
 	}
 	if err := payloadConverter.FromPayloads(&commonpb.Payloads{Payloads: input}, valuePointers...); err != nil {
 		return nil, fmt.Errorf("decode %s %q input: %w", f.kind, f.name, err)
 	}
+	return &DecodedInput{values: values}, nil
+}
+
+// ExecuteDecoded invokes the function with arguments returned by DecodeInput.
+func (f *Function) ExecuteDecoded(
+	contextArgument any,
+	payloadConverter converter.PayloadConverter,
+	input *DecodedInput,
+) (*commonpb.Payload, error) {
+	arguments := make([]reflect.Value, 0, len(input.values)+f.inputStart)
+	if f.inputStart == 1 {
+		arguments = append(arguments, reflect.ValueOf(contextArgument))
+	}
+	arguments = append(arguments, input.values...)
 
 	results := f.function.Call(arguments)
 	if errValue := results[len(results)-1]; !errValue.IsNil() {

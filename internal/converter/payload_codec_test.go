@@ -110,6 +110,60 @@ func TestDecodePayloadsTransformsSignalInputAndHeaders(t *testing.T) {
 	}
 }
 
+func TestDecodePayloadsTransformsQueryArgumentsAndHeaders(t *testing.T) {
+	codec := &markingPayloadCodec{}
+	activation := &workflowactivation.WorkflowActivation{
+		Jobs: []*workflowactivation.WorkflowActivationJob{{
+			Variant: &workflowactivation.WorkflowActivationJob_QueryWorkflow{
+				QueryWorkflow: &workflowactivation.QueryWorkflow{
+					Arguments: []*commonpb.Payload{payload("one"), payload("two")},
+					Headers:   map[string]*commonpb.Payload{"trace": payload("header")},
+				},
+			},
+		}},
+	}
+
+	if err := DecodePayloads(activation, codec); err != nil {
+		t.Fatalf("DecodePayloads failed: %v", err)
+	}
+	query := activation.Jobs[0].GetQueryWorkflow()
+	for _, converted := range append(query.Arguments, query.Headers["trace"]) {
+		if got := string(converted.Metadata["codec"]); got != "decoded" {
+			t.Fatalf("decoded marker = %q, want decoded", got)
+		}
+	}
+	if len(codec.decodeBatchSizes) != 2 || !containsBatch(codec.decodeBatchSizes, 2) {
+		t.Fatalf("decode batch sizes = %v, want query arguments together and header separately", codec.decodeBatchSizes)
+	}
+}
+
+func TestDecodePayloadsTransformsUpdateInputAndHeaders(t *testing.T) {
+	codec := &markingPayloadCodec{}
+	activation := &workflowactivation.WorkflowActivation{
+		Jobs: []*workflowactivation.WorkflowActivationJob{{
+			Variant: &workflowactivation.WorkflowActivationJob_DoUpdate{
+				DoUpdate: &workflowactivation.DoUpdate{
+					Input:   []*commonpb.Payload{payload("one"), payload("two")},
+					Headers: map[string]*commonpb.Payload{"trace": payload("header")},
+				},
+			},
+		}},
+	}
+
+	if err := DecodePayloads(activation, codec); err != nil {
+		t.Fatalf("DecodePayloads failed: %v", err)
+	}
+	update := activation.Jobs[0].GetDoUpdate()
+	for _, converted := range append(update.Input, update.Headers["trace"]) {
+		if got := string(converted.Metadata["codec"]); got != "decoded" {
+			t.Fatalf("decoded marker = %q, want decoded", got)
+		}
+	}
+	if len(codec.decodeBatchSizes) != 2 || !containsBatch(codec.decodeBatchSizes, 2) {
+		t.Fatalf("decode batch sizes = %v, want update inputs together and header separately", codec.decodeBatchSizes)
+	}
+}
+
 func TestEncodePayloadsTransformsCompletionPayloadFieldsButNotSearchAttributes(t *testing.T) {
 	codec := &markingPayloadCodec{}
 	schedule := &workflowcommands.ScheduleActivity{
@@ -167,6 +221,54 @@ func TestEncodePayloadsTransformsFailureEncodedAttributes(t *testing.T) {
 	encodedAttributes := completion.GetFailed().Failure.EncodedAttributes
 	if got := string(encodedAttributes.Metadata["codec"]); got != "encoded" {
 		t.Fatalf("failure encoded-attributes marker = %q, want encoded", got)
+	}
+}
+
+func TestEncodePayloadsTransformsQueryResponse(t *testing.T) {
+	codec := &markingPayloadCodec{}
+	result := &workflowcommands.QueryResult{
+		QueryId: "query-1",
+		Variant: &workflowcommands.QueryResult_Succeeded{
+			Succeeded: &workflowcommands.QuerySuccess{Response: payload("result")},
+		},
+	}
+	completion := &workflowcompletion.WorkflowActivationCompletion{
+		Status: &workflowcompletion.WorkflowActivationCompletion_Successful{
+			Successful: &workflowcompletion.Success{Commands: []*workflowcommands.WorkflowCommand{{
+				Variant: &workflowcommands.WorkflowCommand_RespondToQuery{RespondToQuery: result},
+			}}},
+		},
+	}
+
+	if err := EncodePayloads(completion, codec); err != nil {
+		t.Fatalf("EncodePayloads failed: %v", err)
+	}
+	if got := string(result.GetSucceeded().Response.Metadata["codec"]); got != "encoded" {
+		t.Fatalf("query response marker = %q, want encoded", got)
+	}
+}
+
+func TestEncodePayloadsTransformsCompletedUpdateResponse(t *testing.T) {
+	codec := &markingPayloadCodec{}
+	response := &workflowcommands.UpdateResponse{
+		ProtocolInstanceId: "protocol-1",
+		Response: &workflowcommands.UpdateResponse_Completed{
+			Completed: payload("result"),
+		},
+	}
+	completion := &workflowcompletion.WorkflowActivationCompletion{
+		Status: &workflowcompletion.WorkflowActivationCompletion_Successful{
+			Successful: &workflowcompletion.Success{Commands: []*workflowcommands.WorkflowCommand{{
+				Variant: &workflowcommands.WorkflowCommand_UpdateResponse{UpdateResponse: response},
+			}}},
+		},
+	}
+
+	if err := EncodePayloads(completion, codec); err != nil {
+		t.Fatalf("EncodePayloads failed: %v", err)
+	}
+	if got := string(response.GetCompleted().Metadata["codec"]); got != "encoded" {
+		t.Fatalf("update response marker = %q, want encoded", got)
 	}
 }
 

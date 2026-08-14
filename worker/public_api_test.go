@@ -46,12 +46,16 @@ func TestPublicPackagesComposeWithoutImplementationImports(t *testing.T) {
 	var executeChildWorkflowUntyped func(*workflow.Context, string, workflow.ChildWorkflowOptions, ...any) workflow.UntypedChildWorkflowFuture = workflow.ExecuteChildWorkflowUntyped
 	var getSignalChannel func(*workflow.Context, string) workflow.ReceiveChannel[string] = workflow.GetSignalChannel[string]
 	var getSignalChannelUntyped func(*workflow.Context, string) workflow.UntypedReceiveChannel = workflow.GetSignalChannelUntyped
+	var setQueryHandler func(*workflow.Context, string, any) error = workflow.SetQueryHandler
+	var setUpdateHandler func(*workflow.Context, string, any) error = workflow.SetUpdateHandler
+	var setUpdateHandlerWithOptions func(*workflow.Context, string, any, workflow.UpdateHandlerOptions) error = workflow.SetUpdateHandlerWithOptions
+	var getCurrentUpdateInfo func(*workflow.Context) *workflow.UpdateInfo = workflow.GetCurrentUpdateInfo
 	var registerWorkflow func(*worker.Worker, any) = (*worker.Worker).RegisterWorkflow
 	var registerWorkflowUntyped func(*worker.Worker, string, any) = (*worker.Worker).RegisterWorkflowUntyped
 	var registerActivity func(*worker.Worker, any) = (*worker.Worker).RegisterActivity
 	var registerActivityUntyped func(*worker.Worker, string, any) = (*worker.Worker).RegisterActivityUntyped
-	_, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _ = heartbeat, newWorker, newFuture, newFutureUntyped,
+	_, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _, _ = heartbeat, newWorker, newFuture, newFutureUntyped,
 		executeActivity, executeActivityUntyped, executeLocalActivity, executeLocalActivityUntyped, executeChildWorkflow, executeChildWorkflowUntyped,
-		getSignalChannel, getSignalChannelUntyped,
+		getSignalChannel, getSignalChannelUntyped, setQueryHandler, setUpdateHandler, setUpdateHandlerWithOptions, getCurrentUpdateInfo,
 		registerWorkflow, registerWorkflowUntyped, registerActivity, registerActivityUntyped
 }

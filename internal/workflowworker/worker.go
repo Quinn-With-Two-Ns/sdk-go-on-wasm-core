@@ -331,10 +331,13 @@ type workflowExecution struct {
 	nextSequence     uint32
 	operations       map[uint32]*workflowOperation
 	signalChannels   map[string]*signalChannel
+	queryHandlers    map[string]*registeredQuery
+	updateHandlers   map[string]*registeredUpdate
 	dispatcher       workflowDispatcher
 	commands         []*workflowcommands.WorkflowCommand
 	terminal         bool
 	started          bool
+	bootstrapped     bool
 	stopped          bool
 }
 
@@ -344,13 +347,15 @@ type workflowDispatcher struct {
 }
 
 type workflowCoroutine struct {
-	context  *Context
-	next     func() (struct{}, bool)
-	stopPull func()
-	yield    func(struct{}) bool
-	waiting  *futureImpl
-	done     bool
-	err      error
+	context              *Context
+	next                 func() (struct{}, bool)
+	stopPull             func()
+	yield                func(struct{}) bool
+	waiting              *futureImpl
+	done                 bool
+	err                  error
+	highPriority         bool
+	panicFailsActivation bool
 }
 
 func newWorkflowExecution(payloadConverter converter.PayloadConverter, namespace, taskQueue, runID string) *workflowExecution {
@@ -361,6 +366,8 @@ func newWorkflowExecution(payloadConverter converter.PayloadConverter, namespace
 		runID:            runID,
 		operations:       make(map[uint32]*workflowOperation),
 		signalChannels:   make(map[string]*signalChannel),
+		queryHandlers:    make(map[string]*registeredQuery),
+		updateHandlers:   make(map[string]*registeredUpdate),
 	}
 	return execution
 }
@@ -396,8 +403,19 @@ func (e *workflowExecution) executeSafely(
 }
 
 func (e *workflowExecution) addCoroutine(name string, function func(*Context)) *workflowCoroutine {
-	coroutine := &workflowCoroutine{}
-	coroutine.context = &Context{execution: e, coroutine: coroutine}
+	return e.addCoroutineWithUpdateInfo(name, nil, function)
+}
+
+func (e *workflowExecution) addCoroutineWithUpdateInfo(
+	name string,
+	updateInfo *UpdateInfo,
+	function func(*Context),
+) *workflowCoroutine {
+	coroutine := &workflowCoroutine{
+		highPriority:         updateInfo != nil,
+		panicFailsActivation: updateInfo != nil,
+	}
+	coroutine.context = &Context{execution: e, coroutine: coroutine, updateInfo: updateInfo}
 	coroutine.next, coroutine.stopPull = iter.Pull(func(yield func(struct{}) bool) {
 		coroutine.yield = yield
 		defer func() {
@@ -419,20 +437,37 @@ func (e *workflowExecution) activate(jobs []*workflowactivation.WorkflowActivati
 		return nil, errors.New("workflow execution was not initialized")
 	}
 
-	// Core orders signals before command resolutions because workflow code must observe all signals
-	// in an activation before any coroutine is allowed to run. Deliver them into their named
-	// channels first; unlike command resolutions, signal delivery does not depend on operations that
-	// the workflow creates while running.
+	// Core orders signals and updates before command resolutions and normal workflow routines.
+	// Deliver signals first, then start update handlers as high-priority coroutines. The first drive
+	// bootstraps execution-scoped handler registration; later activations do not run ordinary
+	// workflow code before updates. Queries run last so they observe the final state for the
+	// activation.
 	pending := make([]*workflowactivation.WorkflowActivationJob, 0, len(jobs))
+	queries := make([]*workflowactivation.QueryWorkflow, 0, 1)
+	updates := make([]*workflowactivation.DoUpdate, 0, 1)
 	for _, job := range jobs {
 		if signal := job.GetSignalWorkflow(); signal != nil {
 			e.signalChannel(signal.SignalName).deliver(signal.Input)
 			continue
 		}
+		if query := job.GetQueryWorkflow(); query != nil {
+			queries = append(queries, query)
+			continue
+		}
+		if update := job.GetDoUpdate(); update != nil {
+			updates = append(updates, update)
+			continue
+		}
 		pending = append(pending, job)
 	}
-	if err := e.drive(); err != nil {
-		return nil, err
+	if !e.bootstrapped {
+		if err := e.drive(); err != nil {
+			return nil, err
+		}
+		e.bootstrapped = true
+	}
+	for _, update := range updates {
+		e.startUpdate(update)
 	}
 
 	for len(pending) > 0 {
@@ -464,6 +499,9 @@ func (e *workflowExecution) activate(jobs []*workflowactivation.WorkflowActivati
 	}
 	if err := e.drive(); err != nil {
 		return nil, err
+	}
+	for _, query := range queries {
+		e.emit(e.respondToQuery(query))
 	}
 	commands := e.commands
 	e.commands = nil
@@ -561,23 +599,29 @@ func (e *workflowExecution) drive() error {
 	}
 	for {
 		progressed := false
-		for _, coroutine := range e.dispatcher.coroutines {
-			if coroutine.done || (coroutine.waiting != nil && !coroutine.waiting.ready) {
-				continue
-			}
-			coroutine.waiting = nil
-			e.dispatcher.current = coroutine
-			_, ok := coroutine.next()
-			e.dispatcher.current = nil
-			progressed = true
-			if !ok {
-				coroutine.done = true
-			}
-			if coroutine.err != nil {
-				e.failWorkflow(coroutine.err)
-			}
-			if e.terminal {
-				return nil
+		for _, highPriority := range []bool{true, false} {
+			for _, coroutine := range e.dispatcher.coroutines {
+				if coroutine.highPriority != highPriority || coroutine.done ||
+					(coroutine.waiting != nil && !coroutine.waiting.ready) {
+					continue
+				}
+				coroutine.waiting = nil
+				e.dispatcher.current = coroutine
+				_, ok := coroutine.next()
+				e.dispatcher.current = nil
+				progressed = true
+				if !ok {
+					coroutine.done = true
+				}
+				if coroutine.err != nil {
+					if coroutine.panicFailsActivation {
+						return coroutine.err
+					}
+					e.failWorkflow(coroutine.err)
+				}
+				if e.terminal {
+					return nil
+				}
 			}
 		}
 		if !progressed {
