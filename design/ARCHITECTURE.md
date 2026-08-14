@@ -66,6 +66,7 @@ There are three important boundaries:
 | [`cmd/demo/`](../cmd/demo) | Executable example covering timers, activities, child workflows, and deterministic concurrency. |
 | [`benchmark/`](../benchmark) | Opt-in end-to-end comparison with the official Go SDK. |
 | [`scripts/generate.sh`](../scripts/generate.sh) | Rust-to-WASM build, optimization, `wasm2go` translation, and Go protobuf generation. |
+| [`patches/`](../patches) | Rust changes to the pinned submodule that the committed Core module is built from. |
 
 ## Construction and lifetime
 
@@ -79,6 +80,12 @@ then exposed through two reference-counted views:
 The public `Worker` wraps those views in a Go workflow worker and a Go activity worker. Both sides
 share the same Core worker and task queue, which lets Core return eager activity tasks in response
 to a workflow-task completion.
+
+Constructing the Core worker also starts Core's shared per-namespace worker, which reports worker
+status to the server on the configured interval. That reporting is Core's, not the language side's:
+it reads Core's own slot and poller state, so the Go layer only supplies the interval. Because it
+spawns onto the bridge's Tokio runtime, its status reports and any worker-command polls travel the
+same host gRPC transport as task polls, and advance whenever the host drives the bridge.
 
 Registration happens before `Run`:
 

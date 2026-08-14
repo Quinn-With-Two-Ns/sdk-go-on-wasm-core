@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"math"
 	"sync"
+	"time"
 
 	internalactivity "github.com/temporalio/sdk-go-on-wasm-core/internal/activityworker"
 	"github.com/temporalio/sdk-go-on-wasm-core/internal/corebridge"
@@ -63,6 +64,15 @@ type Options struct {
 	// workflow task. The default is 3. Core can dispatch activities eagerly because
 	// each Worker polls both workflow and activity tasks on the same task queue.
 	MaxEagerActivityReservationsPerWorkflowTask int
+	// WorkerHeartbeatInterval sets how often Core reports this worker's status to the
+	// server, which is what makes the worker visible to Temporal's worker management
+	// APIs. The default is one minute, and Core requires a value between one second
+	// and one minute. Servers that do not advertise the worker heartbeat capability
+	// ignore the reports.
+	WorkerHeartbeatInterval time.Duration
+	// DisableWorkerHeartbeat stops the worker from reporting its status. It takes
+	// precedence over WorkerHeartbeatInterval.
+	DisableWorkerHeartbeat bool
 }
 
 type component interface {
@@ -107,6 +117,7 @@ var (
 		activityOptions internalactivity.Options,
 		workflowOptions internalworkflow.Options,
 		maxEagerActivityReservationsPerWorkflowTask int32,
+		workerHeartbeatIntervalMillis int32,
 	) (combinedCore, error) {
 		return corebridge.NewCombined(
 			options.Address,
@@ -120,6 +131,7 @@ var (
 				MaxConcurrentWorkflowTaskPollers:            int32(workflowOptions.MaxConcurrentWorkflowTaskPollers),
 				MaxCachedWorkflows:                          int32(workflowOptions.MaxCachedWorkflows),
 				MaxEagerActivityReservationsPerWorkflowTask: maxEagerActivityReservationsPerWorkflowTask,
+				WorkerHeartbeatIntervalMillis:               workerHeartbeatIntervalMillis,
 				Connection: corebridge.ConnectionOptions{
 					TLS:    options.TLS,
 					APIKey: options.APIKey,
@@ -130,6 +142,14 @@ var (
 )
 
 const defaultMaxEagerActivityReservationsPerWorkflowTask = 3
+
+// Core accepts worker heartbeat intervals between one second and one minute, and
+// defaults to reporting once a minute.
+const (
+	defaultWorkerHeartbeatInterval = time.Minute
+	minWorkerHeartbeatInterval     = time.Second
+	maxWorkerHeartbeatInterval     = time.Minute
+)
 
 // Worker hosts registered workflow and activity implementations.
 type Worker struct {
@@ -209,7 +229,14 @@ func newWorker(options Options) (*Worker, error) {
 		if err != nil {
 			return nil, err
 		}
-		core, err := newCombinedCoreWorker(options, activityOptions, workflowOptions, maxEager)
+		heartbeatMillis, err := normalizeWorkerHeartbeatInterval(
+			options.WorkerHeartbeatInterval,
+			options.DisableWorkerHeartbeat,
+		)
+		if err != nil {
+			return nil, err
+		}
+		core, err := newCombinedCoreWorker(options, activityOptions, workflowOptions, maxEager, heartbeatMillis)
 		if err != nil {
 			return nil, err
 		}
@@ -296,6 +323,25 @@ func normalizeMaxEagerActivityReservations(value int) (int32, error) {
 		)
 	}
 	return int32(value), nil
+}
+
+// normalizeWorkerHeartbeatInterval converts the configured interval into the
+// milliseconds the Core bridge expects. Zero means the worker does not report status.
+func normalizeWorkerHeartbeatInterval(interval time.Duration, disabled bool) (int32, error) {
+	if disabled {
+		return 0, nil
+	}
+	if interval == 0 {
+		interval = defaultWorkerHeartbeatInterval
+	}
+	if interval < minWorkerHeartbeatInterval || interval > maxWorkerHeartbeatInterval {
+		return 0, fmt.Errorf(
+			"worker heartbeat interval must be between %s and %s",
+			minWorkerHeartbeatInterval,
+			maxWorkerHeartbeatInterval,
+		)
+	}
+	return int32(interval.Milliseconds()), nil
 }
 
 type sharedCombinedCore struct {

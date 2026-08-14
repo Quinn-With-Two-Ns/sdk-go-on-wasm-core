@@ -5,6 +5,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"testing"
+	"time"
 
 	internalactivity "github.com/temporalio/sdk-go-on-wasm-core/internal/activityworker"
 	"github.com/temporalio/sdk-go-on-wasm-core/internal/converter"
@@ -207,6 +208,7 @@ func TestNewCreatesCombinedWorkerWithDefaultEagerReservations(t *testing.T) {
 		activityOptions internalactivity.Options,
 		workflowOptions internalworkflow.Options,
 		maxEager int32,
+		_ int32,
 	) (combinedCore, error) {
 		gotOptions = options
 		gotWorkflowOptions = workflowOptions
@@ -255,7 +257,7 @@ func TestNewForwardsExplicitEagerReservationsToCombinedCore(t *testing.T) {
 	}
 
 	var gotMaxEager int32
-	newCombinedCoreWorker = func(_ Options, _ internalactivity.Options, _ internalworkflow.Options, maxEager int32) (combinedCore, error) {
+	newCombinedCoreWorker = func(_ Options, _ internalactivity.Options, _ internalworkflow.Options, maxEager int32, _ int32) (combinedCore, error) {
 		gotMaxEager = maxEager
 		return &fakeCombinedCore{}, nil
 	}
@@ -265,6 +267,97 @@ func TestNewForwardsExplicitEagerReservationsToCombinedCore(t *testing.T) {
 	}
 	if gotMaxEager != 5 {
 		t.Fatalf("max eager reservations = %d, want 5", gotMaxEager)
+	}
+}
+
+func TestNewForwardsWorkerHeartbeatIntervalToCombinedCore(t *testing.T) {
+	for _, testCase := range []struct {
+		name     string
+		options  Options
+		wantMils int32
+	}{
+		{
+			name:     "defaults to reporting once a minute",
+			options:  Options{TaskQueue: "payments"},
+			wantMils: 60_000,
+		},
+		{
+			name:     "forwards an explicit interval",
+			options:  Options{TaskQueue: "payments", WorkerHeartbeatInterval: 5 * time.Second},
+			wantMils: 5_000,
+		},
+		{
+			name:     "disabling reporting sends zero",
+			options:  Options{TaskQueue: "payments", DisableWorkerHeartbeat: true},
+			wantMils: 0,
+		},
+		{
+			name: "disabling reporting overrides an explicit interval",
+			options: Options{
+				TaskQueue:               "payments",
+				WorkerHeartbeatInterval: 5 * time.Second,
+				DisableWorkerHeartbeat:  true,
+			},
+			wantMils: 0,
+		},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			stubWorkerFactories(t,
+				func(internalworkflow.Options) (component, error) { return newFakeComponent(), nil },
+				func(internalactivity.Options) (component, error) { return newFakeComponent(), nil },
+			)
+			newWorkflowWorkerWithCore = func(internalworkflow.Options, workflowCore) (component, error) {
+				return &fakeComponent{}, nil
+			}
+			newActivityWorkerWithCore = func(internalactivity.Options, activityCore) (component, error) {
+				return &fakeComponent{}, nil
+			}
+
+			var gotHeartbeatMillis int32
+			newCombinedCoreWorker = func(
+				_ Options,
+				_ internalactivity.Options,
+				_ internalworkflow.Options,
+				_ int32,
+				heartbeatMillis int32,
+			) (combinedCore, error) {
+				gotHeartbeatMillis = heartbeatMillis
+				return &fakeCombinedCore{}, nil
+			}
+
+			if _, err := New(testCase.options); err != nil {
+				t.Fatal(err)
+			}
+			if gotHeartbeatMillis != testCase.wantMils {
+				t.Fatalf("worker heartbeat interval = %dms, want %dms", gotHeartbeatMillis, testCase.wantMils)
+			}
+		})
+	}
+}
+
+func TestNewRejectsWorkerHeartbeatIntervalOutsideCoreRange(t *testing.T) {
+	for _, interval := range []time.Duration{time.Millisecond, 999 * time.Millisecond, time.Minute + time.Second} {
+		stubWorkerFactories(t,
+			func(internalworkflow.Options) (component, error) {
+				t.Fatal("workflow constructor should not be called for an invalid heartbeat interval")
+				return nil, nil
+			},
+			func(internalactivity.Options) (component, error) {
+				t.Fatal("activity constructor should not be called for an invalid heartbeat interval")
+				return nil, nil
+			},
+		)
+		newCombinedCoreWorker = func(
+			Options, internalactivity.Options, internalworkflow.Options, int32, int32,
+		) (combinedCore, error) {
+			t.Fatal("combined constructor should not be called for an invalid heartbeat interval")
+			return nil, nil
+		}
+
+		_, err := New(Options{TaskQueue: "payments", WorkerHeartbeatInterval: interval})
+		if err == nil || err.Error() != "worker heartbeat interval must be between 1s and 1m0s" {
+			t.Fatalf("New(%s) error = %v", interval, err)
+		}
 	}
 }
 
@@ -279,7 +372,7 @@ func TestNewRejectsInvalidEagerReservationsForCombinedWorker(t *testing.T) {
 			return nil, nil
 		},
 	)
-	newCombinedCoreWorker = func(Options, internalactivity.Options, internalworkflow.Options, int32) (combinedCore, error) {
+	newCombinedCoreWorker = func(Options, internalactivity.Options, internalworkflow.Options, int32, int32) (combinedCore, error) {
 		t.Fatal("combined constructor should not be called for invalid eager options")
 		return nil, nil
 	}
@@ -311,7 +404,7 @@ func TestNewReleasesCombinedCoreWhenSecondWorkerCreationFails(t *testing.T) {
 	newActivityWorkerWithCore = func(internalactivity.Options, activityCore) (component, error) {
 		return nil, activityErr
 	}
-	newCombinedCoreWorker = func(Options, internalactivity.Options, internalworkflow.Options, int32) (combinedCore, error) {
+	newCombinedCoreWorker = func(Options, internalactivity.Options, internalworkflow.Options, int32, int32) (combinedCore, error) {
 		return combined, nil
 	}
 

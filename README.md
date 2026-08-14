@@ -92,6 +92,10 @@ make generate
 generates the Core protobuf bindings. The generated approximately 25 MB
 `internal/corewasm/generated.go` is committed so downstream Go builds contain the Core module.
 
+The submodule is pinned to an upstream commit, so Rust changes this repository depends on live in
+[`patches/`](patches) and must be applied before regenerating. See
+[patches/README.md](patches/README.md).
+
 The Go host and Rust WASM gRPC transport share
 `internal/sdk-core/crates/protos/protos/local/temporal/sdk/core/wasm_bridge/wasm_bridge.proto` as their wire
 contract. `make generate` produces both language bindings from that file. The messages deliberately
@@ -128,6 +132,14 @@ activities and child workflows, deterministic workflow goroutines, concurrent co
 restart, and `RemoveFromCache`. Its dispatcher uses Go's `iter.Pull` coroutine primitive to run one
 workflow coroutine at a time in stable creation order. Signals, queries, cancellation, local
 activities, workflow API sandboxing, and production deadlock/determinism checks are not implemented.
+
+Core reports worker status to the server once a minute by default, which is what makes the worker
+visible to `temporal worker list` and `temporal worker describe`. The reports carry the worker's
+identity, task queue, run state, start time, and live slot and poller counts. Use
+`WorkerHeartbeatInterval` to change the cadence, which Core requires to be between one second and
+one minute, and `DisableWorkerHeartbeat` to turn reporting off. Servers that do not advertise the
+worker heartbeat capability ignore the reports. Host name, process ID, and host CPU and memory usage
+are reported empty because the embedded Core cannot observe the process hosting it.
 
 `worker.Options` accepts `TLS` for an explicit `tls.Config` and `APIKey` for static bearer
 authentication. Supplying an API key without an explicit TLS configuration enables TLS with the

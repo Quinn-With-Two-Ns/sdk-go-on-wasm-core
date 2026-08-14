@@ -443,6 +443,26 @@ func TestEagerActivityReservationsForCombinedModeRejectsNegativeValues(t *testin
 	}
 }
 
+func TestWorkerHeartbeatIntervalMillisPassesThroughSupportedValues(t *testing.T) {
+	for _, want := range []int32{0, 1_000, 60_000} {
+		got, err := workerHeartbeatIntervalMillis(WorkflowOptions{WorkerHeartbeatIntervalMillis: want})
+		if err != nil {
+			t.Fatalf("worker heartbeat interval %d: %v", want, err)
+		}
+		if got != want {
+			t.Fatalf("worker heartbeat interval = %d, want %d", got, want)
+		}
+	}
+}
+
+func TestWorkerHeartbeatIntervalMillisRejectsNegativeValues(t *testing.T) {
+	if _, err := workerHeartbeatIntervalMillis(WorkflowOptions{
+		WorkerHeartbeatIntervalMillis: -1,
+	}); err == nil {
+		t.Fatal("expected worker heartbeat interval validation error")
+	}
+}
+
 func TestRecordEagerActivityDispatchTimingRecordsEachReturnedActivity(t *testing.T) {
 	recorded := make(chan string, 4)
 	restore := SetTimingHook(func(phase string, elapsed time.Duration) {

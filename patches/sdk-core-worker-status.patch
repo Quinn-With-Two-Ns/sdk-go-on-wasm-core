@@ -1,0 +1,252 @@
+diff --git a/crates/sdk-core-wasm-bridge/src/lib.rs b/crates/sdk-core-wasm-bridge/src/lib.rs
+index 9b7faec..2b853b2 100644
+--- a/crates/sdk-core-wasm-bridge/src/lib.rs
++++ b/crates/sdk-core-wasm-bridge/src/lib.rs
+@@ -14,6 +14,7 @@ use std::{
+         Arc, Mutex, OnceLock,
+         atomic::{AtomicU64, Ordering},
+     },
++    time::Duration,
+ };
+ use temporalio_client::{
+     Connection, ConnectionOptions,
+@@ -40,6 +41,10 @@ use tonic::{
+     metadata::{BinaryMetadataValue, KeyAndValueRef, MetadataMap},
+ };
+ 
++/// Must match the client identity `internal/wasmhost` sets on every gRPC request.
++const SDK_NAME: &str = "go-sdk-core";
++const SDK_VERSION: &str = "v0.1.0";
++
+ const BRIDGE_ERROR: i32 = -1;
+ const BRIDGE_PENDING: i32 = 1;
+ const BRIDGE_BUFFER_TOO_SMALL: i32 = 2;
+@@ -286,6 +291,7 @@ pub extern "C" fn temporal_core_init_with_worker_options(
+     max_concurrent_workflow_task_pollers: usize,
+     max_cached_workflows: usize,
+     max_eager_activity_reservations_per_workflow_task: usize,
++    worker_heartbeat_interval_millis: usize,
+     mode: u32,
+     error_ptr: *mut u8,
+     error_capacity: usize,
+@@ -318,7 +324,7 @@ pub extern "C" fn temporal_core_init_with_worker_options(
+             .build()
+             .map_err(|err| format!("failed to create Tokio runtime: {err}"))?;
+         let runtime_options = RuntimeOptions::builder()
+-            .heartbeat_interval(None)
++            .heartbeat_interval(worker_heartbeat_interval(worker_heartbeat_interval_millis))
+             .disable_environment_info(true)
+             .build()
+             .map_err(|err| format!("invalid Core runtime options: {err}"))?;
+@@ -341,6 +347,10 @@ pub extern "C" fn temporal_core_init_with_worker_options(
+                 .expect("static URL is valid"),
+         )
+         .identity(identity)
++        // Worker status reports carry the client's SDK identity, so it has to match the
++        // identity the Go host puts on every request rather than Core's own default.
++        .client_name(SDK_NAME.to_owned())
++        .client_version(SDK_VERSION.to_owned())
+         .service_override(grpc_service)
+         .dns_load_balancing(None)
+         .keep_alive(None)
+@@ -397,6 +407,12 @@ fn worker_config_for_mode(
+     }
+ }
+ 
++/// Translate the host's heartbeat interval into Core's runtime option. Zero disables worker
++/// heartbeating; Core rejects any non-zero interval outside its supported 1s-60s range.
++fn worker_heartbeat_interval(interval_millis: usize) -> Option<Duration> {
++    (interval_millis != 0).then(|| Duration::from_millis(interval_millis as u64))
++}
++
+ fn decode_worker_init_options(
+     mode: BridgeInitMode,
+     max_concurrent_activity_executions: usize,
+@@ -530,13 +546,21 @@ pub extern "C" fn temporal_core_take_init(error_ptr: *mut u8, error_capacity: us
+             .worker_config
+             .take()
+             .ok_or_else(|| "worker configuration is missing".to_owned())?;
++        // Worker construction spawns Core's shared per-namespace worker, which reports worker
++        // status, so it has to run inside the Tokio runtime and not only the local set.
+         #[cfg(not(target_arch = "wasm32"))]
+-        let worker_result = init_worker(&state._core_runtime, worker_config, connection);
+-        #[cfg(target_arch = "wasm32")]
+-        let worker_result = WORKFLOW_LOCAL_SET.with(|local| {
+-            let _guard = local.enter();
++        let worker_result = {
++            let _runtime_guard = state.runtime.enter();
+             init_worker(&state._core_runtime, worker_config, connection)
+-        });
++        };
++        #[cfg(target_arch = "wasm32")]
++        let worker_result = {
++            let _runtime_guard = state.runtime.enter();
++            WORKFLOW_LOCAL_SET.with(|local| {
++                let _local_guard = local.enter();
++                init_worker(&state._core_runtime, worker_config, connection)
++            })
++        };
+         let worker = match worker_result {
+             Ok(worker) => Arc::new(worker),
+             Err(error) => {
+@@ -1450,6 +1474,38 @@ mod tests {
+         );
+     }
+ 
++    #[test]
++    fn worker_heartbeat_interval_disables_on_zero() {
++        assert_eq!(worker_heartbeat_interval(0), None);
++        assert_eq!(
++            worker_heartbeat_interval(30_000),
++            Some(Duration::from_secs(30))
++        );
++    }
++
++    fn build_runtime_options(interval_millis: usize) -> Result<RuntimeOptions, String> {
++        RuntimeOptions::builder()
++            .heartbeat_interval(worker_heartbeat_interval(interval_millis))
++            .disable_environment_info(true)
++            .build()
++    }
++
++    #[test]
++    fn runtime_options_accept_the_supported_heartbeat_range() {
++        for millis in [1_000, 60_000] {
++            assert!(
++                build_runtime_options(millis).is_ok(),
++                "Core accepts {millis}ms, which is within its supported range"
++            );
++        }
++        for millis in [999, 60_001] {
++            assert!(
++                build_runtime_options(millis).is_err(),
++                "Core rejects {millis}ms, which is outside its supported range"
++            );
++        }
++    }
++
+     #[test]
+     fn worker_config_leaves_default_poller_behavior_to_core() {
+         let config = activity_worker_config("namespace".to_owned(), "queue".to_owned(), 12, 0)
+diff --git a/crates/sdk-core/src/worker/mod.rs b/crates/sdk-core/src/worker/mod.rs
+index 2bc228c..eb3aa63 100644
+--- a/crates/sdk-core/src/worker/mod.rs
++++ b/crates/sdk-core/src/worker/mod.rs
+@@ -32,7 +32,11 @@ pub use tuner::{
+ };
+ // Re-export the generated builder (it's in the tuner module)
+ pub use tuner::TunerHolderOptionsBuilder;
+-pub(crate) use tuner::{RealSysInfo, SystemResourceInfo};
++#[cfg(not(target_family = "wasm"))]
++pub(crate) use tuner::RealSysInfo;
++pub(crate) use tuner::SystemResourceInfo;
++#[cfg(target_family = "wasm")]
++pub(crate) use tuner::UnavailableSysInfo;
+ 
+ pub(crate) use activities::{
+     ExecutingLAId, LocalActRequest, LocalActivityExecutionResult, LocalActivityResolution,
+@@ -855,7 +859,7 @@ impl Worker {
+         let worker_heartbeat = worker_heartbeat_options.map(|heartbeat_options| {
+             let hb_interval = heartbeat_options.interval;
+             let heartbeat_sys_info =
+-                sys_info.unwrap_or_else(|| Arc::new(RealSysInfo::new(hb_interval)));
++                sys_info.unwrap_or_else(|| default_heartbeat_sys_info(hb_interval));
+             let hb_metrics = HeartbeatMetrics {
+                 in_mem_metrics: metrics.in_memory_meter(),
+                 wft_slots: wft_slots.clone(),
+@@ -2306,7 +2310,7 @@ impl WorkerHeartbeatManager {
+                 worker_instance_key: worker_instance_key.to_string(),
+                 host_info: Some(WorkerHostInfo {
+                     host_name: worker_host_name(),
+-                    process_id: std::process::id().to_string(),
++                    process_id: worker_process_id(),
+                     current_host_cpu_usage: heartbeat_manager_metrics.sys_info.used_cpu_percent()
+                         as f32,
+                     current_host_mem_usage: heartbeat_manager_metrics.sys_info.used_mem_percent()
+@@ -2458,6 +2462,32 @@ fn worker_host_name() -> String {
+     String::new()
+ }
+ 
++#[cfg(not(target_family = "wasm"))]
++fn worker_process_id() -> String {
++    std::process::id().to_string()
++}
++
++#[cfg(not(target_family = "wasm"))]
++fn default_heartbeat_sys_info(
++    refresh_interval: Duration,
++) -> Arc<dyn SystemResourceInfo + Send + Sync> {
++    Arc::new(RealSysInfo::new(refresh_interval))
++}
++
++/// WASM targets cannot spawn the real sys-info refresh thread, and cannot observe host resources.
++#[cfg(target_family = "wasm")]
++fn default_heartbeat_sys_info(
++    _refresh_interval: Duration,
++) -> Arc<dyn SystemResourceInfo + Send + Sync> {
++    Arc::new(UnavailableSysInfo)
++}
++
++/// WASM targets have no process identity; `std::process::id` panics there.
++#[cfg(target_family = "wasm")]
++fn worker_process_id() -> String {
++    String::new()
++}
++
+ pub(crate) struct PostActivateHookData<'a> {
+     pub(crate) run_id: &'a str,
+     pub(crate) replaying: bool,
+diff --git a/crates/sdk-core/src/worker/tuner.rs b/crates/sdk-core/src/worker/tuner.rs
+index 5e24357..274fda1 100644
+--- a/crates/sdk-core/src/worker/tuner.rs
++++ b/crates/sdk-core/src/worker/tuner.rs
+@@ -2,7 +2,11 @@ mod fixed_size;
+ mod resource_based;
+ 
+ pub use fixed_size::FixedSizeSlotSupplier;
+-pub(crate) use resource_based::{RealSysInfo, SystemResourceInfo};
++#[cfg(not(target_family = "wasm"))]
++pub(crate) use resource_based::RealSysInfo;
++#[cfg(target_family = "wasm")]
++pub(crate) use resource_based::UnavailableSysInfo;
++pub(crate) use resource_based::SystemResourceInfo;
+ pub use resource_based::{
+     ResourceBasedSlotsOptions, ResourceBasedSlotsOptionsBuilder, ResourceBasedTuner,
+     ResourceController, ResourceSlotOptions,
+diff --git a/crates/sdk-core/src/worker/tuner/resource_based.rs b/crates/sdk-core/src/worker/tuner/resource_based.rs
+index 4ea9401..c71d49c 100644
+--- a/crates/sdk-core/src/worker/tuner/resource_based.rs
++++ b/crates/sdk-core/src/worker/tuner/resource_based.rs
+@@ -273,6 +273,32 @@ pub trait SystemResourceInfo {
+     }
+ }
+ 
++/// Reports no resource usage, for targets where host metrics are unavailable. WASM cannot observe
++/// its host's memory or CPU, and [`RealSysInfo`] cannot run there because it refreshes on a
++/// background thread.
++#[cfg(target_family = "wasm")]
++pub(crate) struct UnavailableSysInfo;
++
++#[cfg(target_family = "wasm")]
++impl SystemResourceInfo for UnavailableSysInfo {
++    fn total_mem(&self) -> u64 {
++        0
++    }
++
++    fn used_mem(&self) -> u64 {
++        0
++    }
++
++    fn used_cpu_percent(&self) -> f64 {
++        0.0
++    }
++
++    // Overridden so the default body does not divide zero by zero.
++    fn used_mem_percent(&self) -> f64 {
++        0.0
++    }
++}
++
+ #[async_trait::async_trait]
+ impl<MI, SK> SlotSupplier for ResourceBasedSlotsForType<MI, SK>
+ where
